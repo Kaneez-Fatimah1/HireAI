@@ -1,0 +1,18 @@
+# If you see langchain-openai vs openai conflicts, uninstall langchain-openai first:
+#   pip uninstall langchain-openai
+# This project uses Ollama locally and does not need langchain-openai.
+
+crewai[tools]
+langchain-ollama
+apscheduler
+fastapi-sso
+litellm
+starlette>=0.49.1
+openai~=1.83.0
+fpdf2
+pdfplumber
+email-validator
+pydantic
+python-dotenv
+streamlit
+pandas

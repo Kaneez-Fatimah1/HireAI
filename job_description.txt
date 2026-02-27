@@ -1,0 +1,19 @@
+The "Modern Classic" (Senior Python Backend)
+Best for testing if your agent can find specific cloud and database skills.
+
+Job Title: Senior Python Backend Engineer (Remote)
+Company: TechStream Solutions
+Role Summary: We are looking for a Senior Python Developer to design and implement scalable server-side logic and integrate with third-party web services.
+Required Skills:
+
+6+ years of experience with Python 3.x and Django.
+
+Deep expertise in PostgreSQL (query optimization, performance tuning).
+
+Production experience with Docker and Kubernetes in an AWS environment.
+
+Proven experience building and scaling RESTful APIs using FastAPI or Flask.
+Nice to Have: > * Familiarity with front-end techs (React/Vue).
+
+Knowledge of Terraform or other IaC tools.
+Responsibilities: Lead backend architecture, mentor junior devs, and ensure high availability of production services.

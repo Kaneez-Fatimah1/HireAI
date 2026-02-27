@@ -1,0 +1,3 @@
+Bob Wilson
+8 years Python, Django, FastAPI, Kubernetes, microservices
+Full AWS and Azure experience

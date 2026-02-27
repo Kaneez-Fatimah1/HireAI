@@ -1,0 +1,3 @@
+John Doe
+6 years Python, Django, REST APIs, PostgreSQL, Docker
+AWS certified, some FastAPI experience

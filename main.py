@@ -14,7 +14,7 @@ import pdfplumber
 from fpdf import FPDF
 from dotenv import load_dotenv
 from crewai import Agent, Task, Crew, LLM
-from crewai.events import crewai_event_bus, TaskCompletedEvent
+from crewai.events import crewai_event_bus, TaskCompletedEvent, TaskStartedEvent
 
 try:
     from crewai_tools import SerperDevTool
@@ -181,16 +181,21 @@ def create_agents_with_config(
     serper_api_key: str | None = None,
     audit_log: list | None = None,
     enable_safe_mode: bool = False,
+    enable_fast_mode: bool = False,
 ):
     """Create agents with custom model and temperature (for Streamlit/configurable runs).
     When enable_live_scouting is True and serper_api_key is provided, the Sourcing agent
-    becomes a Live Talent Scout with SerperDevTool for web search."""
-    custom_llm = LLM(
-        model=f"ollama/{model}",
-        base_url=OLLAMA_BASE_URL,
-        temperature=temperature,
-        timeout=OLLAMA_TIMEOUT,
-    )
+    becomes a Live Talent Scout with SerperDevTool for web search.
+    When enable_fast_mode is True, limits max_tokens to speed up inference on CPU."""
+    llm_kwargs = {
+        "model": f"ollama/{model}",
+        "base_url": OLLAMA_BASE_URL,
+        "temperature": temperature,
+        "timeout": OLLAMA_TIMEOUT,
+    }
+    if enable_fast_mode:
+        llm_kwargs["max_tokens"] = 1024  # Shorter outputs = faster inference
+    custom_llm = LLM(**llm_kwargs)
 
     # Sourcing agent: standard or Live Talent Scout (with SerperDevTool)
     if enable_live_scouting and serper_api_key and SerperDevTool is not None:
@@ -639,18 +644,18 @@ def create_rank_candidates_task(
             agent=agent or coordinator_agent,
         )
     return Task(
-        description=f"""Review all screening results below and create a simple ranked list from highest score to lowest.
-        For each candidate, extract their name and fit score (1-10).
+        description=f"""Review all screening results below and create a ranked list from highest score to lowest.
+        For each candidate, extract their name, fit score (1-10), and the Screener's brief justification for the score.
         Output EXACTLY in this format, one candidate per line (use pipe | as separator):
-        RANK|CANDIDATE_NAME|SCORE
+        RANK|CANDIDATE_NAME|SCORE|JUSTIFICATION
         Example:
-        1|John Doe|9
-        2|Jane Smith|7
-        3|Bob Wilson|6
+        1|John Doe|9|Strong Python and AWS experience aligns well with role requirements
+        2|Jane Smith|7|Good backend skills but limited distributed systems experience
+        3|Bob Wilson|6|Relevant education but only 1 year of professional experience
 
         Screening Results:
         {screening_results}""",
-        expected_output="A ranked list in format RANK|CANDIDATE_NAME|SCORE, one line per candidate, sorted highest to lowest score.",
+        expected_output="A ranked list in format RANK|CANDIDATE_NAME|SCORE|JUSTIFICATION, one line per candidate, sorted highest to lowest score.",
         agent=agent or coordinator_agent,
     )
 
@@ -907,11 +912,31 @@ def run_recruitment_pipeline(
         "Sourcing Specialist": "Sourcing",
     }
 
+    def _get_agent_role(event):
+        """Extract agent role from event.task or event.output."""
+        agent_role = ""
+        if event.task and getattr(event.task, "agent", None):
+            agent_role = getattr(event.task.agent, "role", "") or ""
+        if not agent_role and hasattr(event, "output") and event.output:
+            agent_role = getattr(event.output, "agent", None) or ""
+        return agent_role
+
+    def _on_task_started(source, event):
+        """TaskStartedEvent: update current_activity when a task STARTS."""
+        if task_callback and callable(task_callback) and event.task:
+            try:
+                agent_role = _get_agent_role(event)
+                stage_name = AGENT_ROLE_TO_STAGE.get(agent_role)
+                if stage_name:
+                    task_callback(stage_name, False, None)  # False = not completed, just started
+            except Exception:
+                pass
+
     def _on_task_completed(source, event):
-        """TaskCompletedEvent handler: updates lifecycle when a task completes (more reliable than task_callback)."""
+        """TaskCompletedEvent handler: updates lifecycle when a task completes."""
         if task_callback and callable(task_callback) and event.output:
             try:
-                agent_role = getattr(event.output, "agent", None) or ""
+                agent_role = _get_agent_role(event)
                 stage_name = AGENT_ROLE_TO_STAGE.get(agent_role)
                 if stage_name:
                     task_callback(stage_name, True, event.output)
@@ -959,7 +984,11 @@ def run_part1_sourcing_research(
     def _on_task_completed(source, event):
         if task_callback and callable(task_callback) and event.output:
             try:
-                agent_role = getattr(event.output, "agent", None) or ""
+                agent_role = ""
+                if event.task and getattr(event.task, "agent", None):
+                    agent_role = getattr(event.task.agent, "role", "") or ""
+                if not agent_role:
+                    agent_role = getattr(event.output, "agent", None) or ""
                 stage_name = AGENT_ROLE_TO_STAGE.get(agent_role)
                 if stage_name:
                     task_callback(stage_name, True, event.output)
@@ -1164,7 +1193,16 @@ if __name__ == "__main__":
     else:
         rank_task = create_rank_candidates_task(combined_screening)
         rank_crew = Crew(agents=[coordinator_agent], tasks=[rank_task])
-        ranking_table = parse_ranking_output(str(rank_crew.kickoff()))
+        ranking_table = parse_ranking_output(str(rank_crew.kickoff()), include_highlights=True)
+
+    # Cap candidates to resume count (prevents LLM hallucination)
+    if resumes and ranking_table:
+        max_candidates = len(resumes)
+        if scoring_data and len(scoring_data) > max_candidates:
+            scoring_data = scoring_data[:max_candidates]
+            ranking_table = [(i + 1, c["Candidate"], f"{c['Match_Grade']:.1f}", c["Technical_Score"], c["Experience_Score"], c["Interview_Score"]) for i, c in enumerate(scoring_data)]
+        elif len(ranking_table) > max_candidates:
+            ranking_table = ranking_table[:max_candidates]
 
     # Final Reporting Task
     print("=" * 60)

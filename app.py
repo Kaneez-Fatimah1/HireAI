@@ -104,7 +104,8 @@ def _show_pipeline_output(pdf_path, ranking_table, engagement_data, interview_da
                 [str(r), n, str(s), str(t), str(e), str(i)] for r, n, s, t, e, i in ranking_table
             ]
         elif has_highlights:
-            table_data = [["Rank", "Candidate Name", "Fit Score", "Technical Highlights"]] + [
+            col4 = "Technical Highlights" if engagement_data else "Score Justification"
+            table_data = [["Rank", "Candidate Name", "Fit Score", col4]] + [
                 [str(r), n, str(s), h] for r, n, s, h in ranking_table
             ]
         else:
@@ -113,13 +114,14 @@ def _show_pipeline_output(pdf_path, ranking_table, engagement_data, interview_da
             ]
         st.table(table_data)
         if has_highlights and not scoring_data:
+            col_label = "Technical Highlights" if engagement_data else "Score Justification"
             st.caption("Edit candidate summaries below before export.")
             for idx, row in enumerate(ranking_table):
                 name = row[1] if len(row) >= 2 else str(row)
-                highlights = row[3] if len(row) >= 4 else ""
+                val = row[3] if len(row) >= 4 else ""
                 st.text_area(
-                    f"Technical Highlights: **{name}**",
-                    value=highlights,
+                    f"{col_label}: **{name}**",
+                    value=val,
                     key=f"highlights_{idx}_{name}",
                     height=60,
                     label_visibility="visible",
@@ -151,48 +153,49 @@ def _show_pipeline_output(pdf_path, ranking_table, engagement_data, interview_da
                         label_visibility="visible",
                     )
 
-        if interview_data:
-            st.subheader("📝 Interview Simulation")
-            for row in ranking_table:
-                name = row[1] if len(row) >= 2 else str(row)
-                data = (
-                    interview_data.get(name)
-                    or interview_data.get(name.replace(" ", "_").lower())
-                    or interview_data.get(name.replace(" ", "_"))
-                )
-                if not data:
-                    for k in interview_data:
-                        if name.lower() in k.lower() or k.lower() in name.lower():
-                            data = interview_data[k]
-                            break
-                with st.expander(f"✨ Interactive Interview Simulation: **{name}**"):
-                    if data:
-                        if isinstance(data, dict) and ("question1" in data or "simulated_answer" in data):
-                            # 3-turn simulation format: chat-style transcript
-                            st.caption("Simulated 3-turn technical interview")
-                            chat = []
-                            if data.get("question1"):
-                                chat.append(("Interviewer", data["question1"]))
-                            if data.get("simulated_answer"):
-                                chat.append(("Candidate", data["simulated_answer"]))
-                            if data.get("follow_up"):
-                                chat.append(("Interviewer", data["follow_up"]))
-                            for speaker, text in chat:
-                                if speaker == "Interviewer":
-                                    st.markdown(f"**🎤 Interviewer:** {text}")
-                                else:
-                                    st.markdown(f"**👤 {name}:** {text}")
-                                st.divider()
-                        else:
-                            # Legacy Q&A format
-                            qa_list = data if isinstance(data, list) else []
-                            for idx, (q, expected) in enumerate(qa_list, 1):
-                                st.markdown(f"**Q{idx}:** {q}")
-                                st.markdown(f"*Expected:* {expected}")
-                                if idx < len(qa_list):
-                                    st.divider()
+        # Always show Interview Simulation when we have candidates
+        st.subheader("📝 Interview Simulation")
+        idata = interview_data or {}
+        for row in ranking_table:
+            name = row[1] if len(row) >= 2 else str(row)
+            data = (
+                idata.get(name)
+                or idata.get(name.replace(" ", "_").lower())
+                or idata.get(name.replace(" ", "_"))
+            )
+            if not data:
+                for k in idata:
+                    if name.lower() in k.lower() or k.lower() in name.lower():
+                        data = idata[k]
+                        break
+            with st.expander(f"✨ Interactive Interview Simulation: **{name}**"):
+                if data:
+                    if isinstance(data, dict) and ("question1" in data or "simulated_answer" in data):
+                        # 3-turn simulation format: chat-style transcript
+                        st.caption("Simulated 3-turn technical interview")
+                        chat = []
+                        if data.get("question1"):
+                            chat.append(("Interviewer", data["question1"]))
+                        if data.get("simulated_answer"):
+                            chat.append(("Candidate", data["simulated_answer"]))
+                        if data.get("follow_up"):
+                            chat.append(("Interviewer", data["follow_up"]))
+                        for speaker, text in chat:
+                            if speaker == "Interviewer":
+                                st.markdown(f"**🎤 Interviewer:** {text}")
+                            else:
+                                st.markdown(f"**👤 {name}:** {text}")
+                            st.divider()
                     else:
-                        st.caption("No interview simulation parsed for this candidate.")
+                        # Legacy Q&A format
+                        qa_list = data if isinstance(data, list) else []
+                        for idx, (q, expected) in enumerate(qa_list, 1):
+                            st.markdown(f"**Q{idx}:** {q}")
+                            st.markdown(f"*Expected:* {expected}")
+                            if idx < len(qa_list):
+                                st.divider()
+                else:
+                    st.caption("No interview simulation parsed for this candidate.")
 
     if pdf_path and pdf_path.exists():
         st.success("Pipeline completed successfully!")
@@ -254,6 +257,7 @@ def run_full_pipeline(
     enable_live_scouting: bool = False,
     serper_api_key: str | None = None,
     enable_safe_mode: bool = False,
+    enable_fast_mode: bool = False,
     enable_human_input: bool = False,
     audit_log: list | None = None,
     task_callback=None,
@@ -300,6 +304,7 @@ def run_full_pipeline(
         serper_api_key=serper_api_key,
         audit_log=audit_log,
         enable_safe_mode=enable_safe_mode,
+        enable_fast_mode=enable_fast_mode,
     )
 
     if enable_live_scouting:
@@ -415,7 +420,16 @@ def run_full_pipeline(
         )
         rank_crew = Crew(agents=[agents["coordinator"]], tasks=[rank_task])
         rank_result = rank_crew.kickoff()
-        ranking_table = parse_ranking_output(str(rank_result), include_highlights=enable_live_scouting)
+        ranking_table = parse_ranking_output(str(rank_result), include_highlights=True)
+
+    # Cap candidates to resume count in resume mode (prevents LLM hallucination)
+    if not enable_live_scouting and resumes:
+        max_candidates = len(resumes)
+        if scoring_data and len(scoring_data) > max_candidates:
+            scoring_data = scoring_data[:max_candidates]
+            ranking_table = [(i + 1, c["Candidate"], f"{c['Match_Grade']:.1f}", c["Technical_Score"], c["Experience_Score"], c["Interview_Score"]) for i, c in enumerate(scoring_data)]
+        elif ranking_table and len(ranking_table) > max_candidates:
+            ranking_table = ranking_table[:max_candidates]
 
     # Final Reporting Task: consolidate all data, executive summary, Markdown, Next Steps
     print("=" * 60)
@@ -474,6 +488,7 @@ def run_part1_pipeline(
     enable_live_scouting: bool = False,
     serper_api_key: str | None = None,
     enable_safe_mode: bool = False,
+    enable_fast_mode: bool = False,
     enable_human_input: bool = False,
     audit_log: list | None = None,
     task_callback=None,
@@ -513,6 +528,7 @@ def run_part1_pipeline(
         serper_api_key=serper_api_key,
         audit_log=audit_log,
         enable_safe_mode=enable_safe_mode,
+        enable_fast_mode=enable_fast_mode,
     )
 
     if enable_live_scouting:
@@ -570,7 +586,10 @@ def run_part1_pipeline(
         researcher_output=researcher_output if enable_live_scouting else None,
     )
     rank_crew = Crew(agents=[agents["coordinator"]], tasks=[rank_task])
-    ranking_table = parse_ranking_output(str(rank_crew.kickoff()), include_highlights=enable_live_scouting)
+    ranking_table = parse_ranking_output(str(rank_crew.kickoff()), include_highlights=True)
+    # Cap candidates to resume count in resume mode (prevents LLM hallucination)
+    if not enable_live_scouting and resumes and ranking_table and len(ranking_table) > len(resumes):
+        ranking_table = ranking_table[:len(resumes)]
     engagement_data = parse_engagement_output(engagement_output) if enable_live_scouting and engagement_output else None
 
     audit_log.append({"type": "pipeline_part1_end", "timestamp": datetime.now().isoformat()})
@@ -631,6 +650,20 @@ def run_part2_pipeline(
 
     if scoring_data:
         ranking_table = [(i + 1, c["Candidate"], f"{c['Match_Grade']:.1f}", c["Technical_Score"], c["Experience_Score"], c["Interview_Score"]) for i, c in enumerate(scoring_data)]
+
+    # Cap to approved candidates only (prevents LLM hallucination in Part 2)
+    approved_set = set(n.strip().lower() for n in approved_names)
+    if scoring_data:
+        filtered = [c for c in scoring_data if (c.get("Candidate") or "").strip().lower() in approved_set]
+        if filtered:
+            scoring_data = filtered
+        else:
+            scoring_data = scoring_data[:len(approved_names)]  # fallback: truncate if name match fails
+        ranking_table = [(i + 1, c["Candidate"], f"{c['Match_Grade']:.1f}", c["Technical_Score"], c["Experience_Score"], c["Interview_Score"]) for i, c in enumerate(scoring_data)]
+    elif ranking_table:
+        # Filter to approved names only (when no scoring_data)
+        filtered = [r for r in ranking_table if (r[1] if len(r) >= 2 else "").strip().lower() in approved_set]
+        ranking_table = filtered[:len(approved_names)] if filtered else ranking_table[:len(approved_names)]
 
     # Reporting
     print("Generating Final Recruitment Report...")
@@ -760,6 +793,13 @@ with st.sidebar:
     st.info("Use `ollama list` to see installed models. Run `ollama pull <model>` if not found.")
     st.caption("💡 For faster runs: use smaller models (e.g. qwen2.5:0.5b, llama3.2:1b) and keep human approval off.")
 
+    enable_fast_mode = st.toggle(
+        "Fast mode",
+        value=False,
+        help="Limits output length (max 1024 tokens) for faster inference. Use when pipeline is slow on CPU.",
+        key="fast_mode",
+    )
+
     temperature = st.slider(
         "Temperature",
         min_value=0.1,
@@ -849,6 +889,8 @@ with st.sidebar:
 
     st.divider()
     st.caption("If no files are uploaded, the pipeline will use job_description.txt and the resumes/ folder.")
+    if not enable_live_scouting:
+        st.info("💡 **Resume mode:** Each resume = 1 candidate. To get more candidates, add more .pdf/.txt files to the `resumes/` folder or upload additional files above.")
 
 # Main area: Live Progress & Output
 st.header("🖥️ Live Progress")
@@ -999,13 +1041,17 @@ elif pipeline_running:
     st.session_state["current_activity"] = ACTIVITY_MSGS.get(stage_names[0], "Starting...")
 
     def _on_task_complete(stage_name: str, completed: bool, output):
-        """Callback when a task completes: update lifecycle and current activity."""
-        st.session_state["lifecycle"][stage_name] = True
-        idx = stage_names.index(stage_name) + 1 if stage_name in stage_names else 0
-        if idx < len(stage_names):
-            st.session_state["current_activity"] = ACTIVITY_MSGS.get(stage_names[idx], "")
+        """Callback when a task starts or completes: update lifecycle and current activity."""
+        if completed:
+            st.session_state["lifecycle"][stage_name] = True
+            idx = stage_names.index(stage_name) + 1 if stage_name in stage_names else 0
+            if idx < len(stage_names):
+                st.session_state["current_activity"] = ACTIVITY_MSGS.get(stage_names[idx], "")
+            else:
+                st.session_state["current_activity"] = "Pipeline complete!"
         else:
-            st.session_state["current_activity"] = "Pipeline complete!"
+            # Task started: show current stage activity (don't mark lifecycle complete)
+            st.session_state["current_activity"] = ACTIVITY_MSGS.get(stage_name, f"{stage_name} is running...")
 
     # 1. Check Ollama is running
     ollama_ok, ollama_msg = check_ollama_running()
@@ -1086,6 +1132,7 @@ elif pipeline_running:
                             serper_api_key=p1.get("serper_api_key"),
                             audit_log=audit_log,
                             enable_safe_mode=p1.get("enable_safe_mode", False),
+                            enable_fast_mode=p1.get("enable_fast_mode", False),
                         )
                         result_holder[0] = run_part2_pipeline(
                             job_description=p1["job_description"],
@@ -1111,6 +1158,7 @@ elif pipeline_running:
                             enable_live_scouting=enable_live_scouting,
                             serper_api_key=serper_api_key.strip() if serper_api_key else None,
                             enable_safe_mode=enable_safe_mode,
+                            enable_fast_mode=enable_fast_mode,
                             enable_human_input=enable_human_input,
                             audit_log=audit_log,
                             task_callback=_on_task_complete,
@@ -1126,6 +1174,7 @@ elif pipeline_running:
                             enable_live_scouting=enable_live_scouting,
                             serper_api_key=serper_api_key.strip() if serper_api_key else None,
                             enable_safe_mode=enable_safe_mode,
+                            enable_fast_mode=enable_fast_mode,
                             enable_human_input=enable_human_input,
                             audit_log=audit_log,
                             task_callback=_on_task_complete,
@@ -1225,6 +1274,7 @@ elif pipeline_running:
                 "enable_live_scouting": enable_live_scouting,
                 "serper_api_key": serper_api_key.strip() if serper_api_key else None,
                 "enable_safe_mode": enable_safe_mode,
+                "enable_fast_mode": enable_fast_mode,
             }
             status.update(label="Part 1 complete — Review & approve candidates", state="complete")
             st.rerun()
